@@ -52,13 +52,16 @@ static QPushButton* mkToggle(const QString& text, QWidget* parent = nullptr)
     return b;
 }
 
-// Small non-checkable step button (< / >).
+// Small non-checkable step button (◄ / ►).
 static QPushButton* mkStep(const QString& text, QWidget* parent = nullptr)
 {
     auto* b = new QPushButton(text, parent);
     b->setFlat(false);
     b->setFixedSize(22, 22);
-    b->setStyleSheet("font-size: 11px;");
+    b->setStyleSheet("QPushButton { font-size: 11px; color: #c8d8e8; "
+                     "background: #1a2a3a; border: 1px solid #203040; border-radius: 3px; }"
+                     "QPushButton:hover { background: #203040; }"
+                     "QPushButton:pressed { background: #00b4d8; color: #000; }");
     return b;
 }
 
@@ -200,13 +203,13 @@ void RxApplet::buildUI()
         lbl->setFixedWidth(34);
         row->addWidget(lbl);
 
-        m_stepDown  = mkStep("<");
+        m_stepDown  = mkStep("\u25C4");   // ◄
         m_stepLabel = new QLabel("100 Hz");
         m_stepLabel->setAlignment(Qt::AlignCenter);
         m_stepLabel->setStyleSheet(
             "QLabel { font-size: 11px; background: #0a0a18; border: 1px solid #1e2e3e; "
             "border-radius: 3px; padding: 1px 3px; }");
-        m_stepUp = mkStep(">");
+        m_stepUp = mkStep("\u25BA");   // ►
 
         // Helper: format a step value compactly.
         auto fmtStep = [](int hz) -> QString {

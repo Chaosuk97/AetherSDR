@@ -224,11 +224,12 @@ void FrequencyDial::wheelEvent(QWheelEvent* ev)
     const int steps = ev->angleDelta().y() / 120;
     if (steps == 0) { ev->ignore(); return; }
 
-    if (m_activeColumn >= 0) {
-        // Column selected: tune by that column's place value (original behaviour).
-        setFrequency(m_frequency + placeValueMhz(m_activeColumn) * steps);
+    // Use whichever column the cursor is currently hovering over.
+    // If the cursor isn't over a digit, fall back to the step size.
+    const int hoverCol = columnAtX(static_cast<int>(ev->position().x()));
+    if (hoverCol >= 0) {
+        setFrequency(m_frequency + placeValueMhz(hoverCol) * steps);
     } else {
-        // No column active: tune by the configured step size.
         setFrequencyHz(frequencyHz() + static_cast<long long>(steps) * m_stepHz);
     }
     ev->accept();
