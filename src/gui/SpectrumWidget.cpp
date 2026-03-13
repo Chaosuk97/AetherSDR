@@ -3,6 +3,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QResizeEvent>
+#include <QMouseEvent>
 #include <cmath>
 #include <cstring>
 
@@ -15,6 +16,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAutoFillBackground(false);
     setAttribute(Qt::WA_OpaquePaintEvent);
+    setCursor(Qt::CrossCursor);
 }
 
 void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
@@ -26,9 +28,9 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
 
 void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
 {
-    m_wfMinDbm    = minDbm;
-    m_wfMaxDbm    = maxDbm;
-    m_refLevel    = maxDbm;
+    m_wfMinDbm     = minDbm;
+    m_wfMaxDbm     = maxDbm;
+    m_refLevel     = maxDbm;
     m_dynamicRange = maxDbm - minDbm;
     update();
 }
@@ -36,6 +38,13 @@ void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
 void SpectrumWidget::setSliceFrequency(double freqMhz)
 {
     m_sliceFreqMhz = freqMhz;
+    update();
+}
+
+void SpectrumWidget::setSliceFilter(int lowHz, int highHz)
+{
+    m_filterLowHz  = lowHz;
+    m_filterHighHz = highHz;
     update();
 }
 
@@ -49,20 +58,41 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
     }
     m_bins = binsDbm;
 
-    // Rebuild waterfall image if the widget has been sized
     if (!m_waterfall.isNull())
         pushWaterfallRow(binsDbm, m_waterfall.width());
 
     update();
 }
 
+// ─── Layout helpers ────────────────────────────────────────────────────────────
+
+int SpectrumWidget::mhzToX(double mhz) const
+{
+    const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
+    return static_cast<int>((mhz - startMhz) / m_bandwidthMhz * width());
+}
+
+// ─── Mouse ────────────────────────────────────────────────────────────────────
+
+void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
+{
+    // Only tune if click is in the panadapter area, not the freq scale bar.
+    if (ev->position().y() >= height() - FREQ_SCALE_H) return;
+
+    const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
+    const double mhz = startMhz + (ev->position().x() / width()) * m_bandwidthMhz;
+    emit frequencyClicked(mhz);
+}
+
+// ─── Resize ───────────────────────────────────────────────────────────────────
+
 void SpectrumWidget::resizeEvent(QResizeEvent* ev)
 {
     QWidget::resizeEvent(ev);
 
-    const int wfHeight = static_cast<int>(height() * (1.0f - SPECTRUM_FRAC));
+    const int contentH = height() - FREQ_SCALE_H;
+    const int wfHeight = static_cast<int>(contentH * (1.0f - SPECTRUM_FRAC));
     if (wfHeight > 0 && width() > 0) {
-        // Resize waterfall: allocate new image, copy old content scaled
         QImage newWf(width(), wfHeight, QImage::Format_RGB32);
         newWf.fill(Qt::black);
         if (!m_waterfall.isNull())
@@ -75,14 +105,8 @@ void SpectrumWidget::resizeEvent(QResizeEvent* ev)
 
 QRgb SpectrumWidget::dbmToRgb(float dbm) const
 {
-    // Normalise to [0, 1]: 0 = weakest (cold), 1 = strongest (hot)
-    const float t = qBound(0.0f, (dbm - m_wfMinDbm) / (m_wfMaxDbm - m_wfMinDbm), 1.0f);
-
-    // Map through a blue → cyan → green → yellow → red heat map.
-    // Use HSV: hue sweeps 240° (blue) → 0° (red) as t goes 0 → 1.
-    // Value ramps up for the first 10% so very cold signals show as near-black.
+    const float t   = qBound(0.0f, (dbm - m_wfMinDbm) / (m_wfMaxDbm - m_wfMinDbm), 1.0f);
     const float hue = (1.0f - t) * 240.0f;
-    // Minimum 8% brightness so noise floor shows as dim blue rather than pure black
     const float val = qBound(0.08f, t * 5.0f + 0.08f, 1.0f);
     return QColor::fromHsvF(hue / 360.0f, 1.0f, val).rgba();
 }
@@ -96,12 +120,10 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth)
     const int h = m_waterfall.height();
     if (h <= 1) return;
 
-    // Scroll existing content down by one row.
     uchar* bits = m_waterfall.bits();
     const qsizetype bpl = m_waterfall.bytesPerLine();
     std::memmove(bits + bpl, bits, static_cast<size_t>(bpl) * (h - 1));
 
-    // Paint the new frame at row 0.
     auto* row = reinterpret_cast<QRgb*>(bits);
     for (int x = 0; x < destWidth; ++x) {
         const int binIdx = x * bins.size() / destWidth;
@@ -117,28 +139,29 @@ void SpectrumWidget::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, false);
 
-    const int specH = static_cast<int>(height() * SPECTRUM_FRAC);
-    const int wfY   = specH;
-    const int wfH   = height() - specH;
+    const int contentH = height() - FREQ_SCALE_H;
+    const int specH    = static_cast<int>(contentH * SPECTRUM_FRAC);
+    const int wfH      = contentH - specH;
 
-    const QRect specRect(0, 0, width(), specH);
-    const QRect wfRect(0, wfY, width(), wfH);
+    const QRect specRect (0, 0,     width(), specH);
+    const QRect wfRect   (0, specH, width(), wfH);
+    const QRect scaleRect(0, contentH, width(), FREQ_SCALE_H);
 
-    // Background
     p.fillRect(specRect, QColor(0x0a, 0x0a, 0x14));
 
     drawGrid(p, specRect);
     drawSpectrum(p, specRect);
     drawWaterfall(p, wfRect);
-    drawSliceMarker(p, height());
+    drawSliceOverlay(p, specRect, wfRect);
+    drawFreqScale(p, scaleRect);
 }
+
+// ─── Grid ─────────────────────────────────────────────────────────────────────
 
 void SpectrumWidget::drawGrid(QPainter& p, const QRect& r)
 {
     const int w = r.width();
     const int h = r.height();
-
-    p.setPen(QPen(QColor(0x20, 0x30, 0x40), 1, Qt::DotLine));
 
     // Horizontal dB lines every 20 dB
     const int steps = static_cast<int>(m_dynamicRange / 20.0f);
@@ -149,26 +172,21 @@ void SpectrumWidget::drawGrid(QPainter& p, const QRect& r)
 
         const float dbm = m_refLevel - (m_dynamicRange * i / steps);
         p.setPen(QColor(0x40, 0x60, 0x70));
-        p.drawText(2, y + 12, QString("%1 dBm").arg(static_cast<int>(dbm)));
+        p.drawText(2, y + 12, QString("%1").arg(static_cast<int>(dbm)));
     }
 
-    // Vertical frequency lines every ~50 kHz
+    // Vertical frequency grid lines (no labels — scale bar handles those)
     const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
+    const double endMhz   = m_centerMhz + m_bandwidthMhz / 2.0;
     const double stepMhz  = 0.050;
     const double firstLine = std::ceil(startMhz / stepMhz) * stepMhz;
-    const double endMhz   = m_centerMhz + m_bandwidthMhz / 2.0;
 
     p.setPen(QPen(QColor(0x20, 0x30, 0x40), 1, Qt::DotLine));
-    for (double f = firstLine; f <= endMhz; f += stepMhz) {
-        const int x = static_cast<int>((f - startMhz) / m_bandwidthMhz * w);
-        p.setPen(QPen(QColor(0x20, 0x30, 0x40), 1, Qt::DotLine));
-        p.drawLine(x, r.top(), x, r.bottom());
-
-        p.setPen(QColor(0x40, 0x60, 0x70));
-        const int khz = static_cast<int>(std::round((f - m_centerMhz) * 1000.0));
-        p.drawText(x + 2, r.bottom() - 4, QString("%1k").arg(khz));
-    }
+    for (double f = firstLine; f <= endMhz; f += stepMhz)
+        p.drawLine(mhzToX(f), r.top(), mhzToX(f), r.bottom());
 }
+
+// ─── Spectrum line ────────────────────────────────────────────────────────────
 
 void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
 {
@@ -195,7 +213,6 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
         else        path.lineTo(x, y);
     }
 
-    // Filled area
     path.lineTo(r.right(), r.bottom());
     path.lineTo(r.left(),  r.bottom());
     path.closeSubpath();
@@ -211,6 +228,8 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
     p.setRenderHint(QPainter::Antialiasing, false);
 }
 
+// ─── Waterfall ────────────────────────────────────────────────────────────────
+
 void SpectrumWidget::drawWaterfall(QPainter& p, const QRect& r)
 {
     if (m_waterfall.isNull()) {
@@ -220,26 +239,94 @@ void SpectrumWidget::drawWaterfall(QPainter& p, const QRect& r)
     p.drawImage(r, m_waterfall);
 }
 
-void SpectrumWidget::drawSliceMarker(QPainter& p, int totalHeight)
+// ─── Slice overlay (filter passband + center line) ────────────────────────────
+
+void SpectrumWidget::drawSliceOverlay(QPainter& p, const QRect& specRect, const QRect& wfRect)
 {
     const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
-    if (m_sliceFreqMhz < startMhz ||
-        m_sliceFreqMhz > m_centerMhz + m_bandwidthMhz / 2.0)
-        return;
+    const double endMhz   = m_centerMhz + m_bandwidthMhz / 2.0;
+    if (m_sliceFreqMhz < startMhz || m_sliceFreqMhz > endMhz) return;
 
-    const int x = static_cast<int>(
-        (m_sliceFreqMhz - startMhz) / m_bandwidthMhz * width());
+    const double filterLowMhz  = m_sliceFreqMhz + m_filterLowHz  / 1.0e6;
+    const double filterHighMhz = m_sliceFreqMhz + m_filterHighHz / 1.0e6;
 
-    // Vertical line across the full widget (spectrum + waterfall)
-    p.setPen(QPen(QColor(0xff, 0xa0, 0x00, 180), 1.5, Qt::DashLine));
-    p.drawLine(x, 0, x, totalHeight);
+    const int sliceX   = mhzToX(m_sliceFreqMhz);
+    const int filterX1 = mhzToX(filterLowMhz);
+    const int filterX2 = mhzToX(filterHighMhz);
+    const int filterW  = filterX2 - filterX1;
 
-    // Triangle at top
+    // ── Filter passband shading ──────────────────────────────────────────────
+
+    // Spectrum: slightly brighter fill so the passband stands out over the FFT
+    p.fillRect(QRect(filterX1, specRect.top(), filterW, specRect.height()),
+               QColor(0x00, 0x80, 0xff, 35));
+
+    // Waterfall: subtle overlay so colour map is still readable
+    p.fillRect(QRect(filterX1, wfRect.top(), filterW, wfRect.height()),
+               QColor(0x00, 0x60, 0xe0, 25));
+
+    // Filter edge lines (spectrum only — would clutter the waterfall)
+    p.setPen(QPen(QColor(0x00, 0x90, 0xff, 130), 1));
+    p.drawLine(filterX1, specRect.top(), filterX1, specRect.bottom());
+    p.drawLine(filterX2, specRect.top(), filterX2, specRect.bottom());
+
+    // ── Slice center line ────────────────────────────────────────────────────
+
+    p.setPen(QPen(QColor(0xff, 0xa0, 0x00, 220), 1.5));
+    p.drawLine(sliceX, specRect.top(), sliceX, wfRect.bottom());
+
+    // Triangle marker at top of spectrum
     p.setPen(Qt::NoPen);
     p.setBrush(QColor(0xff, 0xa0, 0x00));
     QPolygon tri;
-    tri << QPoint(x - 6, 0) << QPoint(x + 6, 0) << QPoint(x, 10);
+    tri << QPoint(sliceX - 6, specRect.top())
+        << QPoint(sliceX + 6, specRect.top())
+        << QPoint(sliceX, specRect.top() + 10);
     p.drawPolygon(tri);
+}
+
+// ─── Frequency scale bar ──────────────────────────────────────────────────────
+
+void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
+{
+    p.fillRect(r, QColor(0x06, 0x06, 0x10));
+
+    const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
+    const double endMhz   = m_centerMhz + m_bandwidthMhz / 2.0;
+
+    // Pick a step that gives roughly 5–10 labels across the visible bandwidth.
+    // Candidate steps in MHz; pick the first that gives ≥ 5 divisions.
+    static constexpr double kSteps[] = {
+        0.010, 0.025, 0.050, 0.100, 0.200, 0.500, 1.000
+    };
+    double stepMhz = 0.050;
+    for (double s : kSteps) {
+        if (m_bandwidthMhz / s >= 5.0) { stepMhz = s; break; }
+    }
+
+    const double firstLine = std::ceil(startMhz / stepMhz) * stepMhz;
+
+    QFont f = p.font();
+    f.setPointSize(8);
+    p.setFont(f);
+    const QFontMetrics fm(f);
+
+    for (double freq = firstLine; freq <= endMhz; freq += stepMhz) {
+        const int x = mhzToX(freq);
+
+        // Tick mark
+        p.setPen(QColor(0x40, 0x60, 0x80));
+        p.drawLine(x, r.top(), x, r.top() + 4);
+
+        // Label: show MHz with enough decimal places for the step size
+        const int decimals = (stepMhz < 0.050) ? 4 : 3;
+        const QString label = QString::number(freq, 'f', decimals);
+        const int tw = fm.horizontalAdvance(label);
+        const int lx = qBound(0, x - tw / 2, width() - tw);
+
+        p.setPen(QColor(0x70, 0x90, 0xb0));
+        p.drawText(lx, r.bottom() - 2, label);
+    }
 }
 
 } // namespace AetherSDR

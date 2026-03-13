@@ -70,6 +70,10 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel, &RadioModel::panadapterLevelChanged,
             m_spectrum, &SpectrumWidget::setDbmRange);
 
+    // ── Click-to-tune on the spectrum ─────────────────────────────────────
+    connect(m_spectrum, &SpectrumWidget::frequencyClicked,
+            this, &MainWindow::onFrequencyChanged);
+
     // ── Panadapter stream → audio engine ──────────────────────────────────
     // All VITA-49 traffic arrives on the single client udpport socket owned
     // by PanadapterStream. It strips the header from IF-Data packets and emits
@@ -331,6 +335,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
         m_freqDial->setFrequency(mhz);
         m_updatingFromModel = false;
     });
+    connect(s, &SliceModel::filterChanged, m_spectrum, &SpectrumWidget::setSliceFilter);
 }
 
 void MainWindow::onSliceRemoved(int /*id*/) {}
@@ -341,6 +346,7 @@ void MainWindow::updateSliceControls(SliceModel* s)
     m_updatingFromModel = true;
     m_freqDial->setFrequency(s->frequency());
     m_spectrum->setSliceFrequency(s->frequency());
+    m_spectrum->setSliceFilter(s->filterLow(), s->filterHigh());
     const int modeIdx = m_modeCombo->findText(s->mode());
     if (modeIdx >= 0) m_modeCombo->setCurrentIndex(modeIdx);
     m_updatingFromModel = false;
