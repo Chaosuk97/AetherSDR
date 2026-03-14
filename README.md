@@ -1,5 +1,11 @@
 # AetherSDR Linux Native Client
 
+[![CI](https://github.com/ten9876/AetherSDR/actions/workflows/ci.yml/badge.svg)](https://github.com/ten9876/AetherSDR/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/ten9876/AetherSDR/actions/workflows/codeql.yml/badge.svg)](https://github.com/ten9876/AetherSDR/actions/workflows/codeql.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
+[![Qt6](https://img.shields.io/badge/Qt-6-green.svg)](https://www.qt.io/)
+
 A Linux-native SmartSDR-compatible client for FlexRadio Systems transceivers,
 built with **Qt6** and **C++20**.
 
