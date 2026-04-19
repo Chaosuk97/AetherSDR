@@ -480,6 +480,28 @@ void AudioEngine::setMuted(bool muted)
         m_audioSink->setVolume(muted ? 0.0f : m_rxVolume.load());
 }
 
+void AudioEngine::setRxPan(int v)
+{
+    m_rxPan.store(qBound(0, v, 100));
+}
+
+// Apply the stored RX pan to a stereo float32 buffer in-place.
+// Only called on NR output — the radio itself handles pan when NR is off.
+// Pan law: linear, symmetric around centre (50).
+//   pan 0-50  → L=1.0,           R=pan/50
+//   pan 50-100→ L=(100-pan)/50,  R=1.0
+// At pan=50 both gains are 1.0, so it is a true no-op when centred.
+static void applyRxPanInPlace(float* stereo, int nFrames, int pan)
+{
+    if (pan == 50) return;  // centre — nothing to do
+    const float lGain = (pan >= 50) ? (100 - pan) / 50.0f : 1.0f;
+    const float rGain = (pan <= 50) ? pan        / 50.0f : 1.0f;
+    for (int i = 0; i < nFrames; ++i) {
+        stereo[2 * i    ] *= lGain;
+        stereo[2 * i + 1] *= rGain;
+    }
+}
+
 // Resample 24kHz stereo float32 → 48kHz stereo float32 via r8brain.
 QByteArray AudioEngine::resampleStereo(const QByteArray& pcm)
 {
@@ -556,28 +578,44 @@ void AudioEngine::feedAudioData(const QByteArray& pcm)
             emit levelChanged(computeRMS(pcm));
         } else if (m_rn2Enabled && m_rn2) {
             QByteArray processed = m_rn2->process(pcm);
+            // Re-apply pan lost during NR mono-mix (#1460)
+            applyRxPanInPlace(reinterpret_cast<float*>(processed.data()),
+                              processed.size() / (2 * static_cast<int>(sizeof(float))),
+                              m_rxPan.load());
             writeAudio(processed);
             emit levelChanged(computeRMS(processed));
         } else if (m_nr2Enabled && m_nr2) {
-            processNr2(pcm);
+            processNr2(pcm);  // applyRxPanInPlace called inside processNr2
             writeAudio(m_nr2Output);
             emit levelChanged(computeRMS(m_nr2Output));
 
 #ifdef HAVE_SPECBLEACH
         } else if (m_nr4Enabled && m_nr4) {
             QByteArray processed = m_nr4->process(pcm);
+            // Re-apply pan lost during NR mono-mix (#1460)
+            applyRxPanInPlace(reinterpret_cast<float*>(processed.data()),
+                              processed.size() / (2 * static_cast<int>(sizeof(float))),
+                              m_rxPan.load());
             writeAudio(processed);
             emit levelChanged(computeRMS(processed));
 #endif
 #ifdef HAVE_DFNR
         } else if (m_dfnrEnabled && m_dfnr) {
             QByteArray processed = m_dfnr->process(pcm);
+            // Re-apply pan lost during NR mono-mix (#1460)
+            applyRxPanInPlace(reinterpret_cast<float*>(processed.data()),
+                              processed.size() / (2 * static_cast<int>(sizeof(float))),
+                              m_rxPan.load());
             writeAudio(processed);
             emit levelChanged(computeRMS(processed));
 #endif
 #ifdef __APPLE__
         } else if (m_mnrEnabled && m_mnr) {
             QByteArray processed = m_mnr->process(pcm);
+            // Re-apply pan lost during NR mono-mix (#1460)
+            applyRxPanInPlace(reinterpret_cast<float*>(processed.data()),
+                              processed.size() / (2 * static_cast<int>(sizeof(float))),
+                              m_rxPan.load());
             writeAudio(processed);
             emit levelChanged(computeRMS(processed));
 #endif
@@ -1388,7 +1426,8 @@ void AudioEngine::processNr2(const QByteArray& stereoPcm)
     // Process through SpectralNR (float32 I/O)
     m_nr2->process(m_nr2Mono.data(), m_nr2Processed.data(), stereoFrames);
 
-    // Mono float32 → stereo float32 (duplicate)
+    // Mono float32 → stereo float32, then re-apply the pan the radio had set
+    // before NR mono-mixed it away (#1460).
     const int outBytes = stereoFrames * 2 * static_cast<int>(sizeof(float));
     m_nr2Output.resize(outBytes);
     auto* dst = reinterpret_cast<float*>(m_nr2Output.data());
@@ -1396,6 +1435,7 @@ void AudioEngine::processNr2(const QByteArray& stereoPcm)
         dst[2 * i]     = m_nr2Processed[i];
         dst[2 * i + 1] = m_nr2Processed[i];
     }
+    applyRxPanInPlace(dst, stereoFrames, m_rxPan.load());
 }
 
 QByteArray AudioEngine::applyBoost(const QByteArray& pcm, float gain) const
