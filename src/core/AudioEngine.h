@@ -33,6 +33,9 @@ class DeepFilterFilter;
 class Resampler;
 class ClientEq;
 class ClientComp;
+#ifdef __APPLE__
+class MacNRFilter;
+#endif
 
 // AudioEngine handles audio playback (RX) and capture (TX).
 //
@@ -330,10 +333,10 @@ private:
 
     // Client-side MNR (macOS MMSE-Wiener)
 #ifdef __APPLE__
-    class MacNRFilter* m_mnr{nullptr};
+    std::unique_ptr<MacNRFilter> m_mnr;
 #endif
-    std::atomic<bool> m_mnrEnabled{false};
-    float m_mnrStrength{1.0f};
+    std::atomic<bool>  m_mnrEnabled{false};
+    std::atomic<float> m_mnrStrength{1.0f};
 
     // Client-side RN2 (RNNoise)
     std::unique_ptr<RNNoiseFilter> m_rn2;

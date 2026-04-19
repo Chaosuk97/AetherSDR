@@ -143,7 +143,7 @@ void MacNRFilter::processFrame(const float* inBuf, float* outBuf)
         m_smoothGain[k] = GSMOOTH * m_smoothGain[k] + (1.0f - GSMOOTH) * m_gainBuf[k];
 
         // Effective gain: strength=0 → bypass (1.0), strength=1 → full NR
-        const float appliedGain = 1.0f - m_strength * (1.0f - m_smoothGain[k]);
+        const float appliedGain = 1.0f - m_strength.load() * (1.0f - m_smoothGain[k]);
 
         m_prevGain[k] = appliedGain;
         m_prevPow [k] = m_powerBuf[k];

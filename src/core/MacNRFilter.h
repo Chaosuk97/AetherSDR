@@ -3,6 +3,7 @@
 #ifdef __APPLE__
 
 #include <QByteArray>
+#include <atomic>
 #include <vector>
 #include <Accelerate/Accelerate.h>
 
@@ -26,7 +27,7 @@ namespace AetherSDR {
 //   - User-adjustable strength: 0 = bypass, 1 = full NR.
 //
 // Processing chain (all at 24 kHz):
-//   stereo int16 → mono float → FFT NR (512-pt OLA) → stereo int16
+//   stereo float32 → mono float → FFT NR (512-pt OLA) → stereo float32
 
 class MacNRFilter {
 public:
@@ -35,7 +36,7 @@ public:
 
     bool isValid() const { return m_fftSetup != nullptr; }
 
-    // Process 24 kHz stereo int16 PCM; returns same format, same byte count.
+    // Process 24 kHz stereo float32 PCM; returns same format, same byte count.
     QByteArray process(const QByteArray& pcm24kStereo);
 
     // Reset internal state (e.g. on band change or stream restart).
@@ -44,8 +45,10 @@ public:
     // Noise-reduction strength: 0.0 = bypass, 1.0 = full suppression.
     // The underlying algorithm always runs at full strength; only the
     // blending into the output signal is scaled.
-    void  setStrength(float s) { m_strength = std::clamp(s, 0.0f, 1.0f); }
-    float strength()     const { return m_strength; }
+    // Thread-safe: AudioEngine sets this from the audio thread; the DSP
+    // dialog reads/writes it from the UI thread.
+    void  setStrength(float s) { m_strength.store(std::clamp(s, 0.0f, 1.0f)); }
+    float strength()     const { return m_strength.load(); }
 
 private:
     // Process one N-sample analysis frame; writes H output samples to outBuf.
@@ -89,7 +92,7 @@ private:
     std::vector<float> m_smoothGain; // temporally smoothed gain [NBINS]
     int                m_frameCount{0};
 
-    float m_strength{1.0f};
+    std::atomic<float> m_strength{1.0f};
 };
 
 } // namespace AetherSDR
